@@ -25,8 +25,20 @@ sysctl -w net.core.wmem_max=16777216
 echo never > /sys/kernel/mm/transparent_hugepage/enabled
 echo never > /sys/kernel/mm/transparent_hugepage/defrag
 
-# 4. CPU C-States (advisory only)
-# Suggestion: set processor.max_cstate=0 in GRUB for production
+# 4. Power & Performance Locking (Phase 9)
+# Lock the CPU in 'Performance' mode and disable frequency scaling jitter.
+if command -v cpupower &> /dev/null; then
+    cpupower -c all frequency-set -g performance
+    echo "[BuanAlpha] CPU Governor set to PERFORMANCE."
+else
+    echo "[Warning] cpupower not found. Frequency jitter may occur."
+fi
+
+# Direct Hardware C-State Lock via sysfs
+for i in /sys/devices/system/cpu/cpu*/cpuidle/state*/disable; do
+    echo 1 > "$i"
+done
+echo "[BuanAlpha] All CPU Power-Saving C-States DISABLED."
 
 echo "[BuanAlpha] System Status:"
 grep HugePages /proc/meminfo | head -n 3

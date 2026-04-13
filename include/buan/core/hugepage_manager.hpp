@@ -53,7 +53,11 @@ public:
 
             unsigned long nodemask = (1UL << m_node);
             if (set_mempolicy(MPOL_BIND, &nodemask, sizeof(nodemask) * 8 + 1) != 0) {
-                // Warning handled by caller or logged if necessary
+                return std::unexpected(MemoryError::BIND_POLICY_FAILED);
+            }
+            // Phase 6: Hard-lock the memory pages into the RAM to prevent swap-out
+            if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
+                return std::unexpected(MemoryError::LOCK_FAILED);
             }
         }
 

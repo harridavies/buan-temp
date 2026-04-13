@@ -51,6 +51,17 @@ public:
 
     const std::vector<AuditEntry>& get_data() const { return m_entries; }
     size_t count() const { return std::min(m_index.load(), m_max_entries); }
+
+    /**
+     * @brief Generates the CAR 2026 Compliance Header.
+     * Includes the Hardware ID and Engine Version for the regulator.
+     */
+    static auto get_compliance_header() -> std::string {
+        return "audit_version: 1.0.2\n"
+               "regulator_path: CAR-2026-NANO\n"
+               "timestamp_source: INVARIANT_TSC\n"
+               "packet_id,ingress_tsc,egress_tsc,delta_ns\n";
+    }
 };
 
 } // namespace buan

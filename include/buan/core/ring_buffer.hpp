@@ -46,23 +46,30 @@ private:
     // Cache-line 2: Consumer Owned (Tail)
     alignas(hardware_destructive_interference_size) std::atomic<uint32_t> m_tail{0};
 
+    // Cache-line 3: Statistics (Overflow Registry)
+    alignas(hardware_destructive_interference_size) std::atomic<uint64_t> m_drop_count{0};
+
 public:
     explicit BuanRingBuffer(BuanDescriptor* external_buffer = nullptr)
         : m_buffer(external_buffer), m_owns_buffer(external_buffer == nullptr) {
         if (m_owns_buffer) {
-            m_buffer = new BuanDescriptor[SIZE];
+            // Ensures the entire buffer starts at a 64-byte boundary
+            m_buffer = static_cast<BuanDescriptor*>(std::aligned_alloc(64, sizeof(BuanDescriptor) * SIZE));
         }
     }
 
     ~BuanRingBuffer() {
-        if (m_owns_buffer) delete[] m_buffer;
+        if (m_owns_buffer) std::free(m_buffer);
     }
 
     [[nodiscard]] __attribute__((always_inline)) auto push(const BuanDescriptor& desc) noexcept -> bool {
         const uint32_t h = m_head.load(std::memory_order_relaxed);
         const uint32_t t = m_tail.load(std::memory_order_acquire);
 
-        if (((h + 1) & (SIZE - 1)) == t) return false;
+        if (((h + 1) & (SIZE - 1)) == t) {
+            m_drop_count.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
 
         m_buffer[h] = desc;
         m_head.store((h + 1) & (SIZE - 1), std::memory_order_release);
@@ -78,6 +85,10 @@ public:
         out_desc = m_buffer[t];
         m_tail.store((t + 1) & (SIZE - 1), std::memory_order_release);
         return true;
+    }
+
+    [[nodiscard]] auto dropped_count() const noexcept -> uint64_t {
+        return m_drop_count.load(std::memory_order_relaxed);
     }
 
     // High-performance metrics for the Hela-Audit utility

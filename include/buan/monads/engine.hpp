@@ -1,5 +1,6 @@
 #pragma once
 
+#include "buan/network/portal_interface.hpp"
 #include "buan/network/xdp_portal.hpp"
 #include "buan/network/protocol_parser.hpp"
 #include "buan/core/ring_buffer.hpp"
@@ -29,12 +30,12 @@ enum class EngineStatus {
  */
 class BuanEngine {
 private:
-    BuanXDPPortal& m_portal;
+    IPortal& m_portal;
     BuanRingBuffer<1024>& m_ring;
     float m_drift_threshold = 0.5f;
 
 public:
-    BuanEngine(BuanXDPPortal& portal, BuanRingBuffer<1024>& ring)
+    BuanEngine(IPortal& portal, BuanRingBuffer<1024>& ring)
         : m_portal(portal), m_ring(ring) {}
 
     /**

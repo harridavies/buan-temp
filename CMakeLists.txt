@@ -6,6 +6,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_compile_options(-O3 -march=native -Wall -Wextra -Wpedantic)
+
+# Phase 6: Production Hardware Optimization
+if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
+    message(STATUS "BuanAlpha: Enabling Intel AVX-512 Production Extensions")
+    add_compile_definitions(BUAN_AVX512_ENABLED)
+    add_compile_options(-mavx512f -mavx512bw -mavx512dq -mavx512vl)
+endif()
+
 add_compile_options(-fno-plt -fno-semantic-interposition)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -14,6 +22,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBBPF REQUIRED libbpf)
 pkg_check_modules(LIBXDP REQUIRED libxdp)
 find_library(LIBNUMA numa REQUIRED)
+find_library(LIBPCAP pcap REQUIRED)
 
 find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
 execute_process(
@@ -51,12 +60,14 @@ add_library(buan_core STATIC
     src/network/protocol_parser.cpp
     src/monads/datapath_composition.cpp
     src/network/xdp_portal.cpp
+    src/network/pcap_portal.cpp
 )
 
 target_link_libraries(buan_core 
     PRIVATE ${LIBBPF_LIBRARIES} 
     PRIVATE ${LIBXDP_LIBRARIES} 
     PRIVATE ${LIBNUMA}
+    PRIVATE ${LIBPCAP}
     PRIVATE pthread
 )
 
@@ -66,7 +77,7 @@ target_link_libraries(buan_engine PRIVATE buan_core)
 add_executable(hela_audit src/benchmarks/hela_audit_suite.cpp)
 target_link_libraries(hela_audit PRIVATE buan_core)
 
-nanobind_add_module(buan_alpha_python src/api/python_bindings.cpp)
-target_link_libraries(buan_alpha_python PRIVATE buan_core)
+nanobind_add_module(buan_alpha src/api/python_bindings.cpp)
+target_link_libraries(buan_alpha PRIVATE buan_core)
 
 message(STATUS "BuanAlpha Fabric: Build System Initialized for ${ARCH_TRIPLET}")

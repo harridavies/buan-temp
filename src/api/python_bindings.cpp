@@ -1,6 +1,8 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/optional.h>  // Added for std::optional support
 #include <nanobind/ndarray.h>
+#include <optional>                 // Added for std::optional
 #include "buan/monads/engine.hpp"
 #include "buan/core/types.hpp"
 
@@ -13,6 +15,24 @@ namespace nb = nanobind;
  * ring buffer to ensure the "Bribe" is visible in real-time.
  */
 NB_MODULE(buan_alpha, m) {
+    
+    // 0. Expose the Descriptor (The bridge unit)
+    nb::class_<buan::BuanDescriptor>(m, "Descriptor")
+        .def_ro("addr", &buan::BuanDescriptor::addr)
+        .def_ro("len", &buan::BuanDescriptor::len)
+        .def_ro("flags", &buan::BuanDescriptor::flags);
+
+    // 0.5 Expose the RingBuffer pop method
+    // We bind a specific instance size (1024) used in the engine.
+    nb::class_<buan::BuanRingBuffer<1024>>(m, "RingBuffer")
+        .def(nb::init<>()) // ADD THIS: Allows ba.RingBuffer() in Python
+        .def("pop", [](buan::BuanRingBuffer<1024>& rb) -> std::optional<buan::BuanDescriptor> {
+            buan::BuanDescriptor desc;
+            if (rb.pop(desc)) return desc;
+            return std::nullopt;
+        }, nb::call_guard<nb::gil_scoped_release>())
+        .def_prop_ro("dropped_count", &buan::BuanRingBuffer<1024>::dropped_count);
+
     // 1. Expose the Status Codes
     nb::enum_<buan::EngineStatus>(m, "EngineStatus")
         .value("IDLE", buan::EngineStatus::IDLE)
@@ -23,17 +43,18 @@ NB_MODULE(buan_alpha, m) {
 
     // 2. Expose the Market Tick Structure
     nb::class_<buan::BuanMarketTick>(m, "MarketTick")
+        .def(nb::init<>()) // ADD THIS: Allows ba.MarketTick() in Python
         .def_ro("ingress_tsc", &buan::BuanMarketTick::ingress_tsc)
         .def_ro("symbol_id", &buan::BuanMarketTick::symbol_id)
         .def_ro("price", &buan::BuanMarketTick::price)
         .def_ro("volume", &buan::BuanMarketTick::volume)
         .def_ro("signal_drift", &buan::BuanMarketTick::signal_drift);
-
+        
     // 3. Expose the Engine Orchestrator
     nb::class_<buan::BuanEngine>(m, "Engine")
         .def("step", &buan::BuanEngine::step, nb::call_guard<nb::gil_scoped_release>())
         .def("set_threshold", &buan::BuanEngine::set_threshold);
-
+    
     // 4. The "Secret Weapon": Zero-Copy Data Access
     // This allows Python to see the raw memory address for PyTorch integration.
     m.def("get_tick_address", [](const buan::BuanMarketTick& tick) {

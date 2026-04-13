@@ -3,6 +3,8 @@
 #include <net/if.h>
 #include <sys/mman.h>
 #include <linux/if_link.h>
+#include <linux/if_xdp.h>
+#include <netinet/in.h>
 
 /* Fallback for SKB mode flag if libxdp headers are older/different */
 #ifndef XDP_FLAGS_SKB_MODE
@@ -10,6 +12,13 @@
 #endif
 
 namespace buan {
+
+#ifndef XDP_ZERO_COPY
+#define XDP_ZERO_COPY (1U << 2)
+#endif
+#ifndef XDP_USE_NEED_WAKEUP
+#define XDP_USE_NEED_WAKEUP (1U << 3)
+#endif
 
 BuanXDPPortal::BuanXDPPortal(std::string ifname, uint32_t queue_id)
     : m_ifname(std::move(ifname)), m_queue_id(queue_id) {}
@@ -41,14 +50,24 @@ auto BuanXDPPortal::open() -> std::expected<void, PortalError> {
     struct xsk_socket_config cfg = {
         .rx_size = 2048,
         .tx_size = 2048,
-        .libxdp_flags = XDP_FLAGS_SKB_MODE, // Required for Virtualized/OrbStack NICs
-        .xdp_flags = 0,
-        .bind_flags = XDP_USE_NEED_WAKEUP
+        .libxdp_flags = 0, 
+        .xdp_flags = XDP_FLAGS_DRV_MODE, 
+        .bind_flags = static_cast<uint16_t>(XDP_ZERO_COPY | XDP_USE_NEED_WAKEUP)
     };
 
     int ret = xsk_socket__create(&m_xsk, m_ifname.c_str(), m_queue_id, m_umem, &m_rx_ring, &m_tx_ring, &cfg);
     if (ret != 0) return std::unexpected(PortalError::SOCKET_CREATE_FAILED);
 
+    // Phase 7: Populate Fill Ring so the NIC can start receiving
+    uint32_t idx;
+    int stock_ret = xsk_ring_prod__reserve(&m_fill_ring, 2048, &idx);
+    if (stock_ret > 0) {
+        for (uint32_t i = 0; i < 2048; i++) {
+            *xsk_ring_prod__fill_addr(&m_fill_ring, idx++) = i * 2048;
+        }
+        xsk_ring_prod__submit(&m_fill_ring, 2048);
+    }
+    
     return {};
 }
 

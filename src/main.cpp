@@ -24,10 +24,18 @@ int main(int argc, char** argv) {
     std::string interface = (argc > 1) ? argv[1] : "eth0";
     uint32_t queue_id = (argc > 2) ? std::stoul(argv[2]) : 0;
 
+    if (argc < 2) {
+        std::cout << "Usage: sudo ./buan_engine [interface] [queue_id] [core_id]" << std::endl;
+    }
+    
     std::cout << "[BuanAlpha] Initializing Atomic Ingest on " << interface << " (Queue " << queue_id << ")" << std::endl;
 
     // 2. Resource Isolation (The Moat)
-    auto affinity_res = pin_thread(1);
+    // Phase 7: Production-grade hardware alignment
+    // We pin the thread to the core provided via CLI, or default to Core 1
+    int target_core = (argc > 3) ? std::stoi(argv[3]) : 1;
+    auto affinity_res = pin_thread(target_core);
+
     if (!affinity_res) {
         std::cerr << "[Error] Failed to pin thread to isolated core. Are you running as root?" << std::endl;
         return 1;

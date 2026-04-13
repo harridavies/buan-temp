@@ -1,5 +1,6 @@
 #pragma once
 
+#include "buan/network/portal_interface.hpp"
 #include <string>
 #include <expected>
 #include <cstdint>
@@ -7,29 +8,7 @@
 
 namespace buan {
 
-/**
- * @enum PortalError
- * @brief Error codes for the XDP hardware portal.
- */
-enum class PortalError {
-    INIT_FAILED,
-    UMEM_MAP_FAILED,      // Renamed to avoid collision with <sys/mman.h> MAP_FAILED
-    SOCKET_CREATE_FAILED,
-    POLL_TIMEOUT,
-    NOT_READY,
-    EMPTY
-};
-
-/**
- * @struct IngestFrame
- * @brief Descriptor for a raw packet in the UMEM.
- */
-struct IngestFrame {
-    void* addr;
-    uint32_t len;
-};
-
-class BuanXDPPortal {
+class BuanXDPPortal : public IPortal {
 private:
     std::string m_ifname;
     uint32_t m_queue_id;
@@ -54,9 +33,9 @@ public:
     auto open() -> std::expected<void, PortalError>;
     
     [[nodiscard]] __attribute__((always_inline)) 
-    auto poll_frame() noexcept -> std::expected<IngestFrame, PortalError>;
+    auto poll_frame() noexcept -> std::expected<IngestFrame, PortalError> override;
     
-    void release_frame(void* addr) noexcept;
+    void release_frame(void* addr) noexcept override;
 
     // Non-copyable for hardware stability
     BuanXDPPortal(const BuanXDPPortal&) = delete;

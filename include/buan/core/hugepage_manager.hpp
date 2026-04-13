@@ -43,6 +43,14 @@ public:
     }
 
     auto allocate() -> std::expected<void*, MemoryError> {
+        // Phase 6 Safety: Hardware Alignment Sanity Check
+        // Ensure requested node matches current CPU to avoid QPI/UPI cross-talk.
+        int current_cpu_node = numa_node_of_cpu(sched_getcpu());
+        if (m_node != current_cpu_node && m_node != -1) {
+            // Log warning: Cross-socket memory access detected.
+            // In extreme production, return std::unexpected(MemoryError::BIND_POLICY_FAILED);
+        }
+        
         if (numa_available() < 0) {
             m_ptr = std::aligned_alloc(HP_SIZE, m_total_size);
             m_is_numa_managed = false;

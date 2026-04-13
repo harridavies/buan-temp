@@ -25,6 +25,7 @@ enum class PortalError {
 struct IngestFrame {
     void* addr;
     uint32_t len;
+    uint64_t ingress_tsc; // Added for CAR 2026 Compliance
 };
 
 /**

@@ -6,18 +6,26 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
-echo "[BuanAlpha] Shielding Cores 1-3 from Hardware Interrupts..."
+INTERFACE=${1:-eth0}
+echo "[BuanAlpha] Shielding Cores from $INTERFACE Interrupts..."
 
-# 1. Kill the auto-balancer
-systemctl stop irqbalance
-systemctl disable irqbalance
+# 1. Kill the OS auto-balancer which would otherwise undo our work
+systemctl stop irqbalance 2>/dev/null
+systemctl disable irqbalance 2>/dev/null
 
-# 2. Mask all IRQs to Core 0 (mask '1' is bit 0)
-# This forces every hardware event to be handled by the OS core only.
+# 2. Force all general interrupts to Core 0
 for irq_dir in /proc/irq/*; do
     if [ -d "$irq_dir" ]; then
         echo 1 > "$irq_dir/smp_affinity" 2>/dev/null
     fi
 done
 
-echo "OK: Interrupts moved to Core 0."
+# 3. Specifically target the NIC's IRQ channels (for Multi-Queue support)
+IRQ_IDS=$(grep "$INTERFACE" /proc/interrupts | awk '{print $1}' | sed 's/://')
+
+for irq in $IRQ_IDS; do
+    echo "[BuanAlpha] Pinning IRQ $irq to Core 0"
+    echo 1 > "/proc/irq/$irq/smp_affinity"
+done
+
+echo "OK: Hardware interrupt shield active on Core 0."

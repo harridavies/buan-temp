@@ -23,15 +23,14 @@ NB_MODULE(buan_alpha, m) {
         .def_ro("flags", &buan::BuanDescriptor::flags);
 
     // 0.5 Expose the RingBuffer pop method
-    // We bind a specific instance size (1024) used in the engine.
-    nb::class_<buan::BuanRingBuffer<1024>>(m, "RingBuffer")
-        .def(nb::init<>()) // ADD THIS: Allows ba.RingBuffer() in Python
-        .def("pop", [](buan::BuanRingBuffer<1024>& rb) -> std::optional<buan::BuanDescriptor> {
+    nb::class_<buan::BuanRingBuffer<buan::BuanDescriptor, 1024>>(m, "RingBuffer")
+        .def(nb::init<>()) 
+        .def("pop", [](buan::BuanRingBuffer<buan::BuanDescriptor, 1024>& rb) -> std::optional<buan::BuanDescriptor> {
             buan::BuanDescriptor desc;
             if (rb.pop(desc)) return desc;
             return std::nullopt;
         }, nb::call_guard<nb::gil_scoped_release>())
-        .def_prop_ro("dropped_count", &buan::BuanRingBuffer<1024>::dropped_count);
+        .def_prop_ro("dropped_count", &buan::BuanRingBuffer<buan::BuanDescriptor, 1024>::dropped_count);
 
     // 1. Expose the Status Codes
     nb::enum_<buan::EngineStatus>(m, "EngineStatus")
@@ -42,22 +41,39 @@ NB_MODULE(buan_alpha, m) {
         .value("PORTAL_EMPTY", buan::EngineStatus::PORTAL_EMPTY);
 
     // 2. Expose the Market Tick Structure
+    // 2. Expose the Market Tick Structure (Updated to Read-Write)
     nb::class_<buan::BuanMarketTick>(m, "MarketTick")
-        .def(nb::init<>()) // ADD THIS: Allows ba.MarketTick() in Python
-        .def_ro("ingress_tsc", &buan::BuanMarketTick::ingress_tsc)
-        .def_ro("symbol_id", &buan::BuanMarketTick::symbol_id)
-        .def_ro("price", &buan::BuanMarketTick::price)
-        .def_ro("volume", &buan::BuanMarketTick::volume)
-        .def_ro("signal_drift", &buan::BuanMarketTick::signal_drift);
+        .def(nb::init<>()) 
+        .def_rw("ingress_tsc", &buan::BuanMarketTick::ingress_tsc)
+        .def_rw("symbol_id", &buan::BuanMarketTick::symbol_id)
+        .def_rw("price", &buan::BuanMarketTick::price)
+        .def_rw("volume", &buan::BuanMarketTick::volume)
+        .def_rw("signal_drift", &buan::BuanMarketTick::signal_drift)
+        .def_rw("flags", &buan::BuanMarketTick::flags); // Added missing flags field
         
     // 3. Expose the Engine Orchestrator
     nb::class_<buan::BuanEngine>(m, "Engine")
         .def("step", &buan::BuanEngine::step, nb::call_guard<nb::gil_scoped_release>())
-        .def("set_threshold", &buan::BuanEngine::set_threshold);
-    
-    // 4. The "Secret Weapon": Zero-Copy Data Access
-    // This allows Python to see the raw memory address for PyTorch integration.
-    m.def("get_tick_address", [](const buan::BuanMarketTick& tick) {
+        .def("set_threshold", &buan::BuanEngine::set_threshold)
+        .def("set_price_spike_limit", &buan::BuanEngine::set_price_spike_limit)
+        .def("set_max_vol_limit", &buan::BuanEngine::set_max_vol_limit) // Removed stray semicolon here
+        .def("step_multi", [](buan::BuanEngine& engine, int count) {
+            int captured = 0;
+            for(int i = 0; i < count; ++i) {
+                if(engine.step() == buan::EngineStatus::SIGNAL_CAPTURED) captured++;
+            }
+            return captured;
+        }, nb::call_guard<nb::gil_scoped_release>()); // Semicolon goes here at the end of the chain
+
+    // 4. The "Secret Weapon": Zero-Copy Tensor Support
+    m.def("get_tick_view", [](buan::BuanMarketTick& tick) {
+        size_t shape[1] = { sizeof(buan::BuanMarketTick) / sizeof(uint8_t) };
+        return nb::ndarray<nb::numpy, uint8_t, nb::shape<-1>>(
+            &tick, 1, shape, nb::handle() 
+        );
+    }, nb::rv_policy::reference);
+
+    m.def("get_tick_ptr", [](const buan::BuanMarketTick& tick) {
         return reinterpret_cast<uintptr_t>(&tick);
     });
 }

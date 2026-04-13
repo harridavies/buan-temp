@@ -31,8 +31,6 @@ int main(int argc, char** argv) {
     std::cout << "[BuanAlpha] Initializing Atomic Ingest on " << interface << " (Queue " << queue_id << ")" << std::endl;
 
     // 2. Resource Isolation (The Moat)
-    // Phase 7: Production-grade hardware alignment
-    // We pin the thread to the core provided via CLI, or default to Core 1
     int target_core = (argc > 3) ? std::stoi(argv[3]) : 1;
     auto affinity_res = pin_thread(target_core);
 
@@ -41,14 +39,18 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Align memory to the NIC's physical NUMA socket
+    int nic_node = get_nic_numa_node(interface);
+    std::cout << "[BuanAlpha] Hardware Alignment: NIC on NUMA Node " << nic_node << std::endl;
+
     auto rt_res = set_rt_priority();
     if (!rt_res) {
         std::cerr << "[Warning] Failed to set Real-Time priority. Latency jitter may occur." << std::endl;
     }
 
     // 3. Memory & Network Orchestration
-    // Allocate 1GB HugePage region for zero-copy UMEM
-    BuanHugePageManager hp_manager(1024UL * 1024 * 1024, get_numa_node());
+    // Allocate 1GB HugePage region on the same NUMA node as the NIC
+    BuanHugePageManager hp_manager(1024UL * 1024 * 1024, nic_node);
     auto alloc_res = hp_manager.allocate();
     if (!alloc_res) {
         std::cerr << "[Error] HugePage allocation failed. Run scripts/setup_env.sh first." << std::endl;
@@ -69,8 +71,11 @@ int main(int argc, char** argv) {
     }
 
     // 4. Start the Engine
-    BuanRingBuffer<1024> ring;
-    BuanEngine engine(portal, ring);
+    BuanRingBuffer<BuanDescriptor, 1024> ring;
+    BuanRingBuffer<BuanAuditDescriptor, 8192> audit_ring;
+    std::cout << "[BuanAlpha] Shadow Log Online (Size: 8192)" << std::endl;
+
+    BuanEngine engine(portal, ring, audit_ring);
 
     std::cout << "[BuanAlpha] Engine Online. Busy-polling for signals..." << std::endl;
 

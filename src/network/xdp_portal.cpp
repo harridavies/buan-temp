@@ -1,4 +1,5 @@
 #include "buan/network/xdp_portal.hpp"
+#include "buan/util/rdtsc_clock.hpp"
 #include <xdp/libxdp.h>
 #include <net/if.h>
 #include <sys/mman.h>
@@ -72,6 +73,8 @@ auto BuanXDPPortal::open() -> std::expected<void, PortalError> {
 }
 
 auto BuanXDPPortal::poll_frame() noexcept -> std::expected<IngestFrame, PortalError> {
+    const uint64_t ts = BuanClock::read_precise(); // Capture at the earliest visibility
+
     uint32_t idx;
     if (xsk_ring_cons__peek(&m_rx_ring, 1, &idx) == 0) {
         return std::unexpected(PortalError::EMPTY);
@@ -83,7 +86,8 @@ auto BuanXDPPortal::poll_frame() noexcept -> std::expected<IngestFrame, PortalEr
     IngestFrame frame;
     frame.addr = pkt_addr;
     frame.len = desc->len;
-    
+    frame.ingress_tsc = ts;
+
     xsk_ring_cons__release(&m_rx_ring, 1);
     return frame;
 }

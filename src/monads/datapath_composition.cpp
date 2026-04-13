@@ -1,41 +1,54 @@
 #include "buan/monads/engine.hpp"
+#include "buan/network/binance_parser.hpp"
+#include <cmath>
 
 namespace buan {
 
 auto BuanEngine::step() noexcept -> EngineStatus {
-    // Start the monadic chain by polling the hardware portal
-    auto result = m_portal.poll_frame()
+    return m_portal.poll_frame()
         .transform_error([](auto) { return EngineStatus::PORTAL_EMPTY; })
         .and_then([&](IngestFrame frame) -> std::expected<EngineStatus, EngineStatus> {
-            /** * WE NEST HERE: 
-             * By nesting the next steps inside this lambda, we keep 'frame' 
-             * in scope so we can use its memory address at the very end.
-             */
-            return BuanParser::parse(frame)
+            
+            // Branchless dispatch between CME and Binance based on frame size
+            auto parse_result = (frame.len > 100) 
+                ? BuanParser::parse(frame) 
+                : (std::expected<BuanMarketTick, ParserError>)BinanceParser::parse_trade(frame)
+                    .transform_error([](auto){ return ParserError::UNSUPPORTED_PROTOCOL; });
+
+            return parse_result
                 .transform_error([](auto) { return EngineStatus::IDLE; })
                 .and_then([&](BuanMarketTick tick) -> std::expected<EngineStatus, EngineStatus> {
-                    // 1. Circuit Breaker Logic
-                    if (tick.signal_drift > m_drift_threshold) {
+                    
+                    // 1. Multi-Threshold Circuit Breaker Logic
+                    bool is_safe = (tick.signal_drift <= m_drift_threshold) &&
+                                   (tick.volume <= m_max_vol_limit) &&
+                                   (std::abs(tick.price) < (1LL << 62));
+
+                    if (!is_safe) {
                         return std::unexpected(EngineStatus::FILTERED_BY_BREAKER);
                     }
                     
-                    // 2. Prepare the Descriptor for the Python RingBuffer
-                    // We can now successfully access frame.addr here.
+                    // 2. CAR 2026: Push to the Shadow Log (Auditing Path)
+                    // Cast to void to suppress [[nodiscard]] warning on the audit path
+                    (void)m_audit_ring.push(BuanAuditDescriptor{
+                        .ingress_tsc = tick.ingress_tsc,
+                        .symbol_id = tick.symbol_id,
+                        .flags = tick.flags
+                    });
+
+                    // 3. Prepare Descriptor for the Hot Path
                     BuanDescriptor desc{ 
                         .addr = reinterpret_cast<uint64_t>(frame.addr), 
                         .len = sizeof(BuanMarketTick), 
                         .flags = tick.symbol_id 
                     };
                     
-                    // 3. Push to the "Bribe" path
                     if (m_ring.push(desc)) {
                         return EngineStatus::SIGNAL_CAPTURED;
                     }
                     return std::unexpected(EngineStatus::BUFFER_FULL);
                 });
-        });
-
-    return result.has_value() ? result.value() : result.error();
+        }).value_or(EngineStatus::PORTAL_EMPTY);
 }
 
 } // namespace buan

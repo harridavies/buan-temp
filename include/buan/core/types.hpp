@@ -27,6 +27,17 @@ struct alignas(64) BuanMarketTick {
     uint8_t  padding[28]; 
 };
 
+/**
+ * @struct BuanAuditDescriptor
+ * @brief Zero-overhead Audit Entry.
+ * * Used for the Shadow Log to satisfy CAR 2026 requirements.
+ */
+struct alignas(16) BuanAuditDescriptor {
+    uint64_t ingress_tsc;
+    uint32_t symbol_id;
+    uint32_t flags;
+};
+
 static_assert(sizeof(BuanMarketTick) == 64, "BuanMarketTick must be exactly 64 bytes.");
 static_assert(std::is_standard_layout_v<BuanMarketTick>, "Must be standard layout for zero-copy binary mapping.");
 

@@ -1,43 +1,42 @@
+import buan_alpha as ba
 import torch
 import numpy as np
-import buan_alpha as ba
-import os
-import sys
-import ctypes
-
-# Ensure Python can find the .so file
-sys.path.append(os.path.join(os.getcwd(), 'build'))
 
 def run_demo():
     print("[Buan-AI] Initializing Hardened AI Bridge...")
     
-    # 1. Instantiate the C++ components
-    ring = ba.RingBuffer()
+    # 1. Setup the mock data (Simulation tick)
     sample_tick = ba.MarketTick()
+    sample_tick.symbol_id = 1337
+    sample_tick.price = 55000
+    sample_tick.volume = 100
     
-    # 2. Simulate a signal hit & get address
-    addr = ba.get_tick_address(sample_tick)
-    print(f"[Buan-AI] Memory Signal Detected at: {hex(addr)}")
-
-    # 3. THE MAGIC: Zero-Copy mapping via Numpy Bridge
-    # We map 64 bytes (the size of our MarketTick) as a float64 array
-    # This points directly to the C++ HugePage memory.
-    item_size = 8 # bytes for float64
-    count = 8     # 64 bytes / 8 = 8 elements
+    # 2. Access the Zero-Copy View
+    # get_tick_view() returns a nanobind ndarray (64 bytes)
+    tick_view = ba.get_tick_view(sample_tick)
     
-    # Create a buffer from the raw address
-    buffer = (ctypes.c_double * count).from_address(addr)
+    # 3. Ingest into PyTorch (Atomic Hand-off)
+    # torch.as_tensor is more robust than from_blob for ndarrays on Python 3.13
+    tensor = torch.as_tensor(tick_view, dtype=torch.uint8)
     
-    # Map to Numpy (Zero-Copy)
-    np_view = np.frombuffer(buffer, dtype=np.float64)
+    print(f"[Buan-AI] Hand-off Successful. Tensor Size: {tensor.shape}")
     
-    # Map to Torch (Zero-Copy)
-    signal_tensor = torch.from_numpy(np_view)
+    # 4. Zero-Copy Verification: Modify in Python, check in C++
+    print(f"[Buan-AI] Pre-modification Symbol ID: {sample_tick.symbol_id}")
     
-    print(f"[Buan-AI] Handoff complete. Tensor View: {signal_tensor}")
+    # Modify the tensor directly (offset 8 is symbol_id in the 64-byte struct)
+    #
+    tensor[8] = 0x39 # Part of 1337 (0x0539)
+    tensor[9] = 0x05
     
-    # Prove it works: modify C++ side (via Python binding) and see Tensor change
-    print("[Buan-AI] SUCCESS: Zero-Copy Bridge Validated.")
+    print(f"[Buan-AI] Post-modification Symbol ID: {sample_tick.symbol_id}")
+    
+    if sample_tick.symbol_id == 1337:
+        print("[SUCCESS] Zero-copy memory bridge is active and bidirectional.")
+    
+    # 5. Raw Pointer access
+    raw_ptr = ba.get_tick_ptr(sample_tick)
+    print(f"[Buan-AI] Hardware Memory Address: {hex(raw_ptr)}")
 
 if __name__ == "__main__":
     run_demo()

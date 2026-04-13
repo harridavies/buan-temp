@@ -32,12 +32,12 @@ static_assert(std::is_trivially_copyable_v<BuanDescriptor>, "Must be trivially c
  * @class BuanRingBuffer
  * @brief Lock-free SPSC Queue with strict Cache-Line Isolation.
  */
-template <size_t SIZE = 1024>
+template <typename T = BuanDescriptor, size_t SIZE = 1024>
 class BuanRingBuffer {
     static_assert((SIZE & (SIZE - 1)) == 0, "SIZE must be a power of two for bitwise wrap-around.");
 
 private:
-    BuanDescriptor* m_buffer = nullptr;
+    T* m_buffer = nullptr;
     bool m_owns_buffer = false;
 
     // Cache-line 1: Producer Owned (Head)
@@ -50,11 +50,10 @@ private:
     alignas(hardware_destructive_interference_size) std::atomic<uint64_t> m_drop_count{0};
 
 public:
-    explicit BuanRingBuffer(BuanDescriptor* external_buffer = nullptr)
+    explicit BuanRingBuffer(T* external_buffer = nullptr)
         : m_buffer(external_buffer), m_owns_buffer(external_buffer == nullptr) {
         if (m_owns_buffer) {
-            // Ensures the entire buffer starts at a 64-byte boundary
-            m_buffer = static_cast<BuanDescriptor*>(std::aligned_alloc(64, sizeof(BuanDescriptor) * SIZE));
+            m_buffer = static_cast<T*>(std::aligned_alloc(64, sizeof(T) * SIZE));
         }
     }
 
@@ -62,7 +61,7 @@ public:
         if (m_owns_buffer) std::free(m_buffer);
     }
 
-    [[nodiscard]] __attribute__((always_inline)) auto push(const BuanDescriptor& desc) noexcept -> bool {
+    [[nodiscard]] __attribute__((always_inline)) auto push(const T& desc) noexcept -> bool {
         const uint32_t h = m_head.load(std::memory_order_relaxed);
         const uint32_t t = m_tail.load(std::memory_order_acquire);
 
@@ -76,7 +75,7 @@ public:
         return true;
     }
 
-    [[nodiscard]] __attribute__((always_inline)) auto pop(BuanDescriptor& out_desc) noexcept -> bool {
+    [[nodiscard]] __attribute__((always_inline)) auto pop(T& out_desc) noexcept -> bool {
         const uint32_t t = m_tail.load(std::memory_order_relaxed);
         const uint32_t h = m_head.load(std::memory_order_acquire);
 

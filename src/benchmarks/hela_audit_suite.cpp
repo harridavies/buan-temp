@@ -15,7 +15,7 @@ using namespace buan;
  * * Optimized for Bare Metal verification of the Atomic Path.
  */
 int main(int argc, char** argv) {
-    // Phase 10 Step 1: Accept interface from CLI for production flexibility
+    // Accept interface from CLI for production flexibility
     std::string interface = (argc > 1) ? argv[1] : "eth0";
     std::cout << "[Hela-Audit] Initializing Production Benchmark on " << interface << "..." << std::endl;
 
@@ -25,11 +25,17 @@ int main(int argc, char** argv) {
 
     // 2. Memory & Portal Setup (Production Sizing)
     // 1GB HugePage region bound to the NIC's NUMA node for zero-copy UMEM
-    BuanHugePageManager hp_manager(1024UL * 1024 * 1024, get_numa_node()); 
+    BuanHugePageManager hp_manager(1024UL * 1024 * 1024, get_nic_numa_node(interface)); 
     BuanXDPPortal portal(interface, 0);
-    BuanRingBuffer<1024> ring;
-    BuanEngine engine(portal, ring);
-    BuanAuditLogger logger(10000); // Expanded for production variance
+
+    // FIXED: Explicit template parameters required for the new RingBuffer
+    BuanRingBuffer<BuanDescriptor, 1024> ring;
+    BuanRingBuffer<BuanAuditDescriptor, 8192> audit_ring; // Required by BuanEngine
+
+    // FIXED: Engine now requires the audit_ring as the 3rd argument
+    BuanEngine engine(portal, ring, audit_ring);
+    
+    BuanAuditLogger logger(10000); 
 
     bool hardware_ready = false;
 
@@ -50,11 +56,9 @@ int main(int argc, char** argv) {
     size_t captured = 0;
     uint64_t total_processed = 0;
     
-    // Phase 10: Use high_resolution_clock for precise throughput measurement
     const auto bench_start = std::chrono::high_resolution_clock::now();
 
     // 3. Execution Loop
-    // Phase 10: Increased to 10,000 samples for production-grade statistics
     while (captured < 10000) {
         if (hardware_ready) {
             auto status = engine.step();
@@ -73,7 +77,6 @@ int main(int argc, char** argv) {
             if (std::chrono::duration_cast<std::chrono::seconds>(now - bench_start).count() >= 2) {
                 std::cout << "[Hela-Audit] Generating 10,000 Atomic Latency samples..." << std::endl;
                 
-                // RESET TIMER HERE to measure actual processing speed
                 const auto sim_start = std::chrono::high_resolution_clock::now();
                 
                 for (uint32_t i = 0; i < 10000; ++i) {
@@ -86,7 +89,6 @@ int main(int argc, char** argv) {
                 captured = 10000;
                 total_processed = 10000;
                 
-                // Use this duration for the final calculation
                 auto sim_end = std::chrono::high_resolution_clock::now();
                 auto duration_us = std::chrono::duration_cast<std::chrono::microseconds>(sim_end - sim_start).count();
                 double mps = (double)total_processed / (double)duration_us; 
@@ -97,18 +99,19 @@ int main(int argc, char** argv) {
                 break;
             }
         }
-        yield_to_hardware();
+        // Simplified Mac compatibility: yield_to_hardware() might not exist on all platforms
+        // You can keep your yield_to_hardware() call here if defined in your util headers.
     }
 
-    // 4. Atomic Write to CSV
+    // 4. Atomic Write to CSV (Updated for CAR 2026 Format)
     std::ofstream out("latency_report.csv");
-    out << "packet_id,latency_cycles\n";
+    out << BuanAuditLogger::get_compliance_header();
     for (size_t i = 0; i < captured; ++i) {
         const auto& e = logger.get_data()[i];
-        out << e.packet_id << "," << (e.egress_tsc - e.ingress_tsc) << "\n";
+        uint64_t delta_ns = (e.egress_tsc - e.ingress_tsc);
+        out << e.packet_id << "," << e.ingress_tsc << "," << e.egress_tsc << "," << delta_ns << "\n";
     }
 
-    // Only print the final summary if we didn't already print the simulated one
     if (hardware_ready) {
         auto end_time = std::chrono::high_resolution_clock::now();
         auto duration_us = std::chrono::duration_cast<std::chrono::microseconds>(end_time - bench_start).count();

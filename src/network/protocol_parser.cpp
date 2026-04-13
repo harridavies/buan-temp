@@ -12,8 +12,8 @@ namespace buan {
 
 auto BuanParser::parse(const IngestFrame& frame) noexcept -> std::expected<BuanMarketTick, ParserError> {
     // 1. Establish the high-precision ingress timestamp IMMEDIATELY
-    const uint64_t ts = BuanClock::read_precise();
-
+    const uint64_t ts = frame.ingress_tsc; // Use the pre-captured hardware-aligned timestamp
+    
     // 2. Minimum size check (Binary Header + SBE Header + Trade Message)
     constexpr size_t min_size = sizeof(CmeBinaryHeader) + sizeof(SbeMessageHeader) + sizeof(CmeTradeReport);
     if (frame.len < min_size) {
@@ -73,6 +73,8 @@ auto BuanParser::parse(const IngestFrame& frame) noexcept -> std::expected<BuanM
      * @brief Standard Scalar Path (Fallback for Non-ARM/Production)
      * This remains for compatibility and serves as the baseline for Hela-Audit.
      */
+    // Ensure the memory is prefetched into L1 cache for the next step
+    __builtin_prefetch(base + 64, 0, 3);
     tick.symbol_id = trade->security_id;
     tick.price     = trade->md_entry_px;
     tick.volume    = static_cast<uint32_t>(trade->md_entry_size);
@@ -102,7 +104,12 @@ auto BuanParser::parse_batch(std::span<IngestFrame> frames, std::span<BuanMarket
     // Process only the packets allowed by the hardware mask
     for (int i = 0; i < 8; ++i) {
         if (mask & (1 << i)) {
-            ticks[i] = parse(frames[i]).value();
+            // Monadic "Correct-by-Construction" pattern: 
+            // Only populate the tick if the parse succeeds, otherwise skip.
+            auto parse_res = parse(frames[i]);
+            if (parse_res.has_value()) {
+                ticks[count++] = parse_res.value();
+            }
         }
     }
     return _mm_popcnt_u32(mask); // Return number of successfully parsed trades

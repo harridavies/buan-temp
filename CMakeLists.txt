@@ -58,6 +58,7 @@ add_custom_target(buan_gatekeeper ALL DEPENDS ${XDP_KERN_OBJ})
 add_library(buan_core STATIC
     src/core/arena_allocator.cpp
     src/network/protocol_parser.cpp
+    src/network/binance_parser.cpp
     src/monads/datapath_composition.cpp
     src/network/xdp_portal.cpp
     src/network/pcap_portal.cpp

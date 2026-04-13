@@ -5,6 +5,9 @@
 #include <numa.h>
 #include <pthread.h>
 #include <sched.h>
+#include <fstream>
+#include <string>
+#include <algorithm>
 
 namespace buan {
 
@@ -53,6 +56,23 @@ enum class AffinityError {
 [[nodiscard]] inline auto get_numa_node() noexcept -> int {
     int node = numa_node_of_cpu(sched_getcpu());
     return (node < 0) ? 0 : node;
+}
+
+/**
+ * @brief Discovers the NUMA node associated with a specific network interface.
+ * * Ensures memory allocation is physically adjacent to the NIC hardware.
+ */
+[[nodiscard]] inline auto get_nic_numa_node(const std::string& ifname) noexcept -> int {
+#if defined(__linux__)
+    std::string path = "/sys/class/net/" + ifname + "/device/numa_node";
+    std::ifstream node_file(path);
+    int node = 0;
+    if (node_file >> node) {
+        // Linux returns -1 if the device isn't NUMA-aware; treat as node 0
+        return (node < 0) ? 0 : node;
+    }
+#endif
+    return 0; // Fallback for macOS (M-Series) or failed reads
 }
 
 /**

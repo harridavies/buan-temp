@@ -25,7 +25,8 @@ enum class PortalError {
 struct IngestFrame {
     void* addr;
     uint32_t len;
-    uint64_t ingress_tsc; // Added for CAR 2026 Compliance
+    uint64_t ingress_tsc;     // Local CPU cycles (for live) or Historical NS (for replay)
+    uint64_t historical_ns;   // Nanoseconds since epoch from PCAP
 };
 
 /**

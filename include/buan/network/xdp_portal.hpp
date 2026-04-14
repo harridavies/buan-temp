@@ -40,6 +40,11 @@ public:
     // Non-copyable for hardware stability
     BuanXDPPortal(const BuanXDPPortal&) = delete;
     auto operator=(const BuanXDPPortal&) -> BuanXDPPortal& = delete;
+
+    /**
+     * @brief Task 7.3.1: Submits an order template directly to the NIC TX ring.
+     */
+    [[nodiscard]] auto send_order(void* addr, uint32_t len) noexcept -> std::expected<void, PortalError>;
 };
 
 } // namespace buan

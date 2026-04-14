@@ -96,4 +96,26 @@ void BuanXDPPortal::release_frame(void* addr) noexcept {
     (void)addr;
 }
 
+auto BuanXDPPortal::send_order(void* addr, uint32_t len) noexcept -> std::expected<void, PortalError> {
+    uint32_t idx;
+    // Reserve a slot in the TX ring for our order.
+    if (xsk_ring_prod__reserve(&m_tx_ring, 1, &idx) == 0) {
+        return std::unexpected(PortalError::SOCKET_CREATE_FAILED); 
+    }
+
+    struct xdp_desc* tx_desc = xsk_ring_prod__tx_desc(&m_tx_ring, idx);
+    // AF_XDP requires an offset relative to the start of the UMEM area.
+    tx_desc->addr = static_cast<uint8_t*>(addr) - static_cast<uint8_t*>(m_umem_area);
+    tx_desc->len = len;
+
+    xsk_ring_prod__submit(&m_tx_ring, 1);
+
+    // Notify the kernel to process the TX ring if the 'need_wakeup' flag is set.
+    if (xsk_ring_prod__needs_wakeup(&m_tx_ring)) {
+        sendto(xsk_socket__fd(m_xsk), nullptr, 0, MSG_DONTWAIT, nullptr, 0);
+    }
+
+    return {};
+}
+
 } // namespace buan

@@ -54,6 +54,10 @@ int buan_gatekeeper_prog(struct xdp_md* ctx) {
     }
 
     return XDP_PASS;
+
+    /* Task 7.3.2: Logic for handling XDP_TX return code. 
+       In Zero-Copy AF_XDP, the driver handles userspace TX directly. 
+       This hook can be used for kernel-level packet reflection or circuit breakers. */
 }
 
 char license[] SEC("_license") = "GPL";

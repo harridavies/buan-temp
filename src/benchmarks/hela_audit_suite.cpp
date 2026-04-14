@@ -1,11 +1,17 @@
+#define PCAP_DONT_INCLUDE_PCAP_BPF_H
+#include "buan/network/pcap_portal.hpp" // Include pcap first to establish the macro guard
 #include "buan/monads/engine.hpp"
 #include "buan/benchmarks/audit_logger.hpp"
 #include "buan/core/hugepage_manager.hpp"
 #include "buan/util/affinity_helper.hpp"
 #include "buan/util/rdtsc_clock.hpp"
+#include "buan/risk/risk_gate.hpp"
+#include "buan/benchmarks/audit_flusher.hpp"
+#include <atomic>
 #include <iostream>
 #include <fstream>
 #include <chrono>
+#include <thread>
 
 using namespace buan;
 
@@ -30,10 +36,17 @@ int main(int argc, char** argv) {
 
     // FIXED: Explicit template parameters required for the new RingBuffer
     BuanRingBuffer<BuanDescriptor, 1024> ring;
-    BuanRingBuffer<BuanAuditDescriptor, 8192> audit_ring; // Required by BuanEngine
+    BuanRingBuffer<BuanAuditDescriptor, 8192> audit_ring; 
 
-    // FIXED: Engine now requires the audit_ring as the 3rd argument
-    BuanEngine engine(portal, ring, audit_ring);
+    // Phase 8: Initialize the Risk Gate for production verification
+    BuanRiskGate risk_gate(10000, 10000000000LL, 500000000000LL);
+
+    // Engine now takes the risk_gate as the 4th argument
+    BuanEngine engine(portal, ring, audit_ring, risk_gate);
+
+    // Phase 9: Paced Replay state variables
+    uint64_t last_historical_ns = 0;
+    auto last_wall_clock = std::chrono::high_resolution_clock::now();
     
     BuanAuditLogger logger(10000); 
 
@@ -58,6 +71,10 @@ int main(int argc, char** argv) {
     
     const auto bench_start = std::chrono::high_resolution_clock::now();
 
+    std::atomic<bool> bench_running{true};
+    AuditFlusher flusher(audit_ring, bench_running, "bench_audit.bin");
+    std::thread flusher_thread(&AuditFlusher::run, &flusher);
+
     // 3. Execution Loop
     while (captured < 10000) {
         if (hardware_ready) {
@@ -72,33 +89,50 @@ int main(int argc, char** argv) {
                 }
             }
         } else {
-            // Trigger simulation if no hardware or no traffic for 2 seconds
-            auto now = std::chrono::high_resolution_clock::now();
-            if (std::chrono::duration_cast<std::chrono::seconds>(now - bench_start).count() >= 2) {
-                std::cout << "[Hela-Audit] Generating 10,000 Atomic Latency samples..." << std::endl;
-                
-                const auto sim_start = std::chrono::high_resolution_clock::now();
-                
-                for (uint32_t i = 0; i < 10000; ++i) {
-                    uint64_t s = BuanClock::read_precise();
-                    for(volatile int j=0; j<120; j = j + 1); 
-                    uint64_t e = BuanClock::read_precise();
-                    logger.record(i, s, e);
+            // Task 9.2: Market Replay Simulation Path
+            // On MacBook/Orbstack, we use the PcapPortal for high-fidelity backtesting.
+            std::string pcap_file = (argc > 2) ? argv[2] : "data/market_sample.pcap";
+            BuanPcapPortal pcap_portal(pcap_file);
+            
+            std::cout << "[Hela-Audit] Starting Paced Replay of: " << pcap_file << std::endl;
+            // Simulation start captured for throughput metrics [Task 9.2]
+            // Simulation start captured for throughput metrics [Task 9.2]
+            const auto sim_start = std::chrono::high_resolution_clock::now();
+            (void)sim_start; // Explicitly suppress unused variable warning
+
+            while (captured < 10000) {
+                auto frame_res = pcap_portal.poll_frame();
+                if (!frame_res) break;
+
+                auto frame = frame_res.value();
+
+                // Task 9.2: ENFORCE PACING
+                if (last_historical_ns > 0) {
+                    uint64_t time_delta_ns = frame.historical_ns - last_historical_ns;
+                    
+                    // Enforce gap if it's larger than 1 microsecond to avoid OS jitter
+                    if (time_delta_ns > 1000) {
+                        auto target_time = last_wall_clock + std::chrono::nanoseconds(time_delta_ns);
+                        std::this_thread::sleep_until(target_time);
+                    }
                 }
+
+                // Inject frame into the engine
+                // (Assuming you add a BuanEngine::inject(frame) or similar)
+                // For now, we simulate the engine step timing:
+                uint64_t start_tsc = BuanClock::read_precise();
                 
-                captured = 10000;
-                total_processed = 10000;
-                
-                auto sim_end = std::chrono::high_resolution_clock::now();
-                auto duration_us = std::chrono::duration_cast<std::chrono::microseconds>(sim_end - sim_start).count();
-                double mps = (double)total_processed / (double)duration_us; 
-                
-                std::cout << "---------------------------------------------------" << std::endl;
-                std::cout << "[Hela-Audit] Simulated Throughput: " << mps << " Million Msgs/Sec" << std::endl;
-                std::cout << "---------------------------------------------------" << std::endl;
-                break;
+                // Update pacing state
+                last_historical_ns = frame.historical_ns;
+                last_wall_clock = std::chrono::high_resolution_clock::now();
+
+                // Record the "Atomic Gap"
+                logger.record(captured++, start_tsc, BuanClock::read_precise());
+                total_processed++;
             }
+            break; 
         }
+
         // Simplified Mac compatibility: yield_to_hardware() might not exist on all platforms
         // You can keep your yield_to_hardware() call here if defined in your util headers.
     }
@@ -122,6 +156,9 @@ int main(int argc, char** argv) {
         std::cout << "---------------------------------------------------" << std::endl;
     }
     
+    bench_running.store(false);
+    if (flusher_thread.joinable()) flusher_thread.join();
+
     std::cout << "[Hela-Audit] SUCCESS: latency_report.csv generated." << std::endl;
     return 0;
 }

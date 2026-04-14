@@ -9,3 +9,7 @@ Makefile
 install_manifest.txt
 compile_commands.json
 _deps/
+venv/
+.env/
+__pycache__/
+*.pyc

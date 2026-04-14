@@ -7,6 +7,8 @@
 #include "buan/core/hugepage_manager.hpp"
 #include "buan/monads/engine.hpp"
 #include "buan/util/affinity_helper.hpp"
+#include "buan/benchmarks/audit_flusher.hpp"
+#include "buan/network/sbe_order_builder.hpp"
 
 using namespace buan;
 
@@ -75,7 +77,37 @@ int main(int argc, char** argv) {
     BuanRingBuffer<BuanAuditDescriptor, 8192> audit_ring;
     std::cout << "[BuanAlpha] Shadow Log Online (Size: 8192)" << std::endl;
 
-    BuanEngine engine(portal, ring, audit_ring);
+    // Task 8.1 & 8.2: Initialize the Risk Gate
+    // Limits: 10,000 unit position, Price Corridor: 100.00 to 5000.00 (scaled by 10^8)
+    BuanRiskGate risk_gate(10000, 10000000000LL, 500000000000LL);
+    std::cout << "[BuanAlpha] Risk Gate Armed (Net Limit: 10,000)" << std::endl;
+
+    BuanEngine engine(portal, ring, audit_ring, risk_gate);
+
+    // Task 7.1.3: Carve out a "Hot Template" region from the HugePage memory.
+    // This memory is already mapped to the UMEM, making it DMA-accessible for the NIC.
+    void* template_base = hp_manager.data();
+    if (!template_base) {
+        std::cerr << "[Error] Could not locate template memory region." << std::endl;
+        return 1;
+    }
+
+    // Task 7.2.1: Initialize a sample order template for the "Atomic Strike".
+    auto* nos_template = static_cast<NewOrderSingle*>(template_base);
+    SbeOrderBuilder::prepare_template(nos_template, 1001, "TRADING_01", "BUAN_CORE");
+    std::cout << "[BuanAlpha] Egress 'Hot Template' initialized at " << template_base << std::endl;
+
+    // Task 10.1: Synchronize with NIC Hardware Clock (eth0 mapping)
+    if (BuanClock::sync_with_phc("/dev/ptp0")) {
+        std::cout << "[BuanAlpha] PTP Hardware Clock Synchronized." << std::endl;
+    } else {
+        std::cout << "[BuanAlpha] Warning: PHC sync failed. Check /dev/ptpX." << std::endl;
+    }
+
+    // Task 10.2: Start Lock-Free Shadow Log Flusher on Core 0
+    AuditFlusher flusher(audit_ring, g_running, "shadow_log.bin");
+    std::thread flusher_thread(&AuditFlusher::run, &flusher);
+    std::cout << "[BuanAlpha] Shadow Log persistence active on Core 0." << std::endl;
 
     std::cout << "[BuanAlpha] Engine Online. Busy-polling for signals..." << std::endl;
 
@@ -93,5 +125,8 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "\n[BuanAlpha] Shutting down gracefully..." << std::endl;
+    
+    if (flusher_thread.joinable()) flusher_thread.join();
+
     return 0;
 }

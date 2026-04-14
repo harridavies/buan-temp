@@ -24,6 +24,10 @@ auto BuanPcapPortal::poll_frame() noexcept -> std::expected<IngestFrame, PortalE
     IngestFrame frame;
     frame.addr = const_cast<u_char*>(data);
     frame.len = header->len;
+    // Task 9.1: Extract microsecond precision from PCAP header
+    frame.historical_ns = (static_cast<uint64_t>(header->ts.tv_sec) * 1000000000ULL) + 
+                          (static_cast<uint64_t>(header->ts.tv_usec) * 1000ULL);
+                          
     return frame;
 }
 

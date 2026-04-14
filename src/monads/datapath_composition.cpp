@@ -1,5 +1,6 @@
 #include "buan/monads/engine.hpp"
 #include "buan/network/binance_parser.hpp"
+#include "buan/risk/risk_gate.hpp"
 #include <cmath>
 
 namespace buan {
@@ -26,6 +27,13 @@ auto BuanEngine::step() noexcept -> EngineStatus {
 
                     if (!is_safe) {
                         return std::unexpected(EngineStatus::FILTERED_BY_BREAKER);
+                    }
+
+                    // Task 8.3: Monadic Risk Integration
+                    // Check if the proposed tick (or resulting trade) violates risk limits.
+                    // We assume Side=1 (Buy) for the logic check in this polling cycle.
+                    if (!m_risk_gate.verify(tick.price, tick.volume, 1)) {
+                        return std::unexpected(EngineStatus::FILTERED_BY_RISK);
                     }
                     
                     // 2. CAR 2026: Push to the Shadow Log (Auditing Path)

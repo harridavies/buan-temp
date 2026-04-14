@@ -14,7 +14,8 @@ namespace buan {
 struct AuditEntry {
     uint32_t packet_id;
     uint64_t ingress_tsc;
-    uint64_t egress_tsc;
+    uint64_t factor_tsc; // Thinking finished
+    uint64_t egress_tsc; // Delivery finished
 };
 
 /**
@@ -42,10 +43,10 @@ public:
      * @param egress TSC captured at AI delivery
      */
     __attribute__((always_inline))
-    void record(uint32_t id, uint64_t ingress, uint64_t egress) noexcept {
+    void record(uint32_t id, uint64_t ingress, uint64_t factor, uint64_t egress) noexcept {
         size_t idx = m_index.fetch_add(1, std::memory_order_relaxed);
         if (idx < m_max_entries) {
-            m_entries[idx] = {id, ingress, egress};
+            m_entries[idx] = {id, ingress, factor, egress};
         }
     }
 
@@ -60,7 +61,7 @@ public:
         return "audit_version: 1.0.2\n"
                "regulator_path: CAR-2026-NANO\n"
                "timestamp_source: INVARIANT_TSC\n"
-               "packet_id,ingress_tsc,egress_tsc,delta_ns\n";
+               "packet_id,ingress_tsc,factor_tsc,egress_tsc,factor_lat_ns,total_lat_ns\n";
     }
 };
 

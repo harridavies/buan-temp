@@ -16,3 +16,5 @@ __pycache__/
 data/
 $
 *.bin
+notes.md
+repomix-output.xml

@@ -37,6 +37,11 @@ public:
     
     void release_frame(void* addr) noexcept override;
 
+    /**
+     * @brief Task 1.1: Reclaims completed TX descriptors from the NIC.
+     */
+    void complete_tx() noexcept;
+    
     // Non-copyable for hardware stability
     BuanXDPPortal(const BuanXDPPortal&) = delete;
     auto operator=(const BuanXDPPortal&) -> BuanXDPPortal& = delete;

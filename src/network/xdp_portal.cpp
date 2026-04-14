@@ -48,17 +48,30 @@ auto BuanXDPPortal::map_memory_region(void* buffer, size_t size) -> std::expecte
 }
 
 auto BuanXDPPortal::open() -> std::expected<void, PortalError> {
-    struct xsk_socket_config cfg = {
-        .rx_size = 2048,
-        .tx_size = 2048,
-        .libxdp_flags = 0, 
-        .xdp_flags = XDP_FLAGS_DRV_MODE, 
-        .bind_flags = static_cast<uint16_t>(XDP_ZERO_COPY | XDP_USE_NEED_WAKEUP)
-    };
+    struct xsk_socket_config cfg = {};
+    cfg.rx_size = 2048;
+    cfg.tx_size = 2048;
+    cfg.libxdp_flags = 0;
+    cfg.xdp_flags = 0; // Let the library decide the best mode
+    cfg.bind_flags = XDP_USE_NEED_WAKEUP;
 
+    // 1. Try High-Performance Native Driver Mode (Production Path)
+    cfg.xdp_flags = XDP_FLAGS_DRV_MODE;
+    cfg.bind_flags |= XDP_ZERO_COPY;
+    
     int ret = xsk_socket__create(&m_xsk, m_ifname.c_str(), m_queue_id, m_umem, &m_rx_ring, &m_tx_ring, &cfg);
-    if (ret != 0) return std::unexpected(PortalError::SOCKET_CREATE_FAILED);
+    
+    // 2. Fallback to Generic/SKB Mode (MacBook/Simulation Path)
+    if (ret != 0) {
+        cfg.xdp_flags = XDP_FLAGS_SKB_MODE;
+        cfg.bind_flags &= ~XDP_ZERO_COPY; // Disable Zero-Copy for virtual interfaces
+        cfg.bind_flags |= XDP_COPY;
+        
+        ret = xsk_socket__create(&m_xsk, m_ifname.c_str(), m_queue_id, m_umem, &m_rx_ring, &m_tx_ring, &cfg);
+    }
 
+    if (ret != 0) return std::unexpected(PortalError::SOCKET_CREATE_FAILED);
+    
     // Phase 7: Populate Fill Ring so the NIC can start receiving
     uint32_t idx;
     int stock_ret = xsk_ring_prod__reserve(&m_fill_ring, 2048, &idx);
@@ -92,25 +105,41 @@ auto BuanXDPPortal::poll_frame() noexcept -> std::expected<IngestFrame, PortalEr
     return frame;
 }
 
+/**
+ * @brief Cleans up the Completion Ring.
+ * Must be called periodically to free up UMEM frames used by previous TX operations.
+ */
+void BuanXDPPortal::complete_tx() noexcept {
+    uint32_t idx;
+    size_t completed = xsk_ring_cons__peek(&m_comp_ring, 2048, &idx);
+    if (completed > 0) {
+        xsk_ring_cons__release(&m_comp_ring, completed);
+    }
+}
+
 void BuanXDPPortal::release_frame(void* addr) noexcept {
     (void)addr;
 }
 
 auto BuanXDPPortal::send_order(void* addr, uint32_t len) noexcept -> std::expected<void, PortalError> {
+    // 1. Maintain ring health: Try to reclaim finished frames first
+    complete_tx();
+
     uint32_t idx;
-    // Reserve a slot in the TX ring for our order.
+    // 2. Reserve a slot in the TX ring. Non-blocking.
     if (xsk_ring_prod__reserve(&m_tx_ring, 1, &idx) == 0) {
-        return std::unexpected(PortalError::SOCKET_CREATE_FAILED); 
+        return std::unexpected(PortalError::EMPTY); 
     }
 
     struct xdp_desc* tx_desc = xsk_ring_prod__tx_desc(&m_tx_ring, idx);
-    // AF_XDP requires an offset relative to the start of the UMEM area.
+    
+    // 3. ZERO-COPY: Map the pre-baked template address to UMEM offset
     tx_desc->addr = static_cast<uint8_t*>(addr) - static_cast<uint8_t*>(m_umem_area);
     tx_desc->len = len;
 
     xsk_ring_prod__submit(&m_tx_ring, 1);
 
-    // Notify the kernel to process the TX ring if the 'need_wakeup' flag is set.
+    // 4. Kick the NIC if it's in poll mode
     if (xsk_ring_prod__needs_wakeup(&m_tx_ring)) {
         sendto(xsk_socket__fd(m_xsk), nullptr, 0, MSG_DONTWAIT, nullptr, 0);
     }

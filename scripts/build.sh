@@ -45,6 +45,13 @@ chmod +x scripts/setup_env.sh
 
 # 4. Compilation
 echo -e "${BLUE}[BuanAlpha] Generating build files via CMake...${NC}"
+# Task 10.2.1: Verify Hardware Math Support
+if grep -q "avx512" /proc/cpuinfo; then
+    echo -e "${GREEN}[BuanAlpha] OK: AVX-512 detected. Production math enabled.${NC}"
+else
+    echo -e "${RED}[BuanAlpha] WARNING: AVX-512 not found. Falling back to scalar math.${NC}"
+fi
+
 cd build
 
 # Use Clang for eBPF + C++23

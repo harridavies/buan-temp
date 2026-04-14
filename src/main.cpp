@@ -7,6 +7,7 @@
 #include "buan/core/hugepage_manager.hpp"
 #include "buan/monads/engine.hpp"
 #include "buan/util/affinity_helper.hpp"
+#include "buan/util/market_stimulator.hpp"
 #include "buan/benchmarks/audit_flusher.hpp"
 #include "buan/network/sbe_order_builder.hpp"
 
@@ -77,10 +78,16 @@ int main(int argc, char** argv) {
     BuanRingBuffer<BuanAuditDescriptor, 8192> audit_ring;
     std::cout << "[BuanAlpha] Shadow Log Online (Size: 8192)" << std::endl;
 
-    // Task 8.1 & 8.2: Initialize the Risk Gate
-    // Limits: 10,000 unit position, Price Corridor: 100.00 to 5000.00 (scaled by 10^8)
-    BuanRiskGate risk_gate(10000, 10000000000LL, 500000000000LL);
-    std::cout << "[BuanAlpha] Risk Gate Armed (Net Limit: 10,000)" << std::endl;
+    // Ensure the flusher filename includes a timestamp or ID for uniqueness
+    std::string log_name = "buan_audit_" + std::to_string(BuanClock::read()) + ".bin";
+    AuditFlusher flusher(audit_ring, g_running, log_name);
+    std::thread flusher_thread(&AuditFlusher::run, &flusher);
+    std::cout << "[BuanAlpha] Audit Shadow Log writing to: " << log_name << std::endl;
+
+    // Pillar 2: Initialize Risk Engine
+    // Params: Max Pos (10k), Max Drift (500 bps / 5%), Max Order Size (5k), Max Rate (1000 msgs/ms)
+    BuanRiskEngine risk_gate(10000, 500, 5000, 1000);
+    std::cout << "[BuanAlpha] Sovereign Guard ARMED." << std::endl;
 
     BuanEngine engine(portal, ring, audit_ring, risk_gate);
 
@@ -94,7 +101,7 @@ int main(int argc, char** argv) {
 
     // Task 7.2.1: Initialize a sample order template for the "Atomic Strike".
     auto* nos_template = static_cast<NewOrderSingle*>(template_base);
-    SbeOrderBuilder::prepare_template(nos_template, 1001, "TRADING_01", "BUAN_CORE");
+    SbeOrderBuilder::pre_bake(nos_template, 1001, "TRADING_01");
     std::cout << "[BuanAlpha] Egress 'Hot Template' initialized at " << template_base << std::endl;
 
     // Task 10.1: Synchronize with NIC Hardware Clock (eth0 mapping)
@@ -104,10 +111,18 @@ int main(int argc, char** argv) {
         std::cout << "[BuanAlpha] Warning: PHC sync failed. Check /dev/ptpX." << std::endl;
     }
 
-    // Task 10.2: Start Lock-Free Shadow Log Flusher on Core 0
-    AuditFlusher flusher(audit_ring, g_running, "shadow_log.bin");
-    std::thread flusher_thread(&AuditFlusher::run, &flusher);
-    std::cout << "[BuanAlpha] Shadow Log persistence active on Core 0." << std::endl;
+    // Task 6.2: Optional Stimulator Mode
+    bool stim_mode = false;
+    for(int i = 1; i < argc; ++i) {
+        if(std::string(argv[i]) == "--stimulate") stim_mode = true;
+    }
+
+    std::unique_ptr<MarketStimulator> stim;
+    if (stim_mode) {
+        std::cout << "[BuanAlpha] STIMULATOR MODE: Launching 4 Storm Threads..." << std::endl;
+        stim = std::make_unique<MarketStimulator>("192.168.100.2", 12345);
+        stim->start(4);
+    }
 
     std::cout << "[BuanAlpha] Engine Online. Busy-polling for signals..." << std::endl;
 

@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>BuanAlpha | Alpha Vision</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body { background: #0a0a0a; color: #00ff41; font-family: 'Courier New', monospace; }
+        #heatmap { display: grid; grid-template-columns: repeat(64, 15px); gap: 1px; margin: 20px; }
+        .pixel { width: 15px; height: 15px; background: #1a1a1a; }
+        .header { margin: 20px; border-bottom: 1px solid #00ff41; padding-bottom: 10px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>BUAN_ALPHA // GLOBAL_MARKET_FOREST</h1>
+        <div>STATUS: <span id="status">CONNECTING...</span> | TICKERS: 2048</div>
+    </div>
+    <div id="heatmap"></div>
+
+    <script>
+        const grid = d3.select("#heatmap");
+        const pixels = [];
+
+        // Create the 32x64 grid
+        for (let i = 0; i < 2048; i++) {
+            pixels.push(grid.append("div").attr("class", "pixel").attr("id", "p-" + i));
+        }
+
+        const socket = new WebSocket('ws://localhost:8080');
+        const colorScale = d3.scaleLinear()
+            .domain([-3, 0, 3])
+            .range(["#ff003c", "#1a1a1a", "#00ff41"]); // Red (Panic), Dark (Neutral), Green (Alpha)
+
+        socket.onopen = () => { document.getElementById("status").innerText = "CONNECTED"; };
+        
+        socket.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            const z_scores = data.z_scores;
+            
+            for (let i = 0; i < 2048; i++) {
+                const z = z_scores[i];
+                d3.select("#p-" + i).style("background-color", colorScale(z));
+            }
+        };
+    </script>
+</body>
+</html>

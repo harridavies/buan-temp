@@ -9,6 +9,8 @@
 #include <numaif.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <string>
+#include <fcntl.h>
 
 namespace buan {
 
@@ -27,6 +29,7 @@ private:
     int m_node;
     bool m_is_numa_managed{false};
     bool m_is_mmaped{false};
+    std::string m_shm_name; // Name for POSIX Shared Memory
 
     static constexpr size_t HP_SIZE = 2UL * 1024 * 1024;
 
@@ -42,47 +45,40 @@ public:
         }
     }
 
-    auto allocate() -> std::expected<void*, MemoryError> {
-        // Phase 6 Safety: Hardware Alignment Sanity Check
-        // Ensure requested node matches current CPU to avoid QPI/UPI cross-talk.
-        int current_cpu_node = numa_node_of_cpu(sched_getcpu());
-        if (m_node != current_cpu_node && m_node != -1) {
-            // Log warning: Cross-socket memory access detected.
-            // In extreme production, return std::unexpected(MemoryError::BIND_POLICY_FAILED);
-        }
+    auto allocate(const std::string& name = "") -> std::expected<void*, MemoryError> {
+        m_shm_name = name;
         
-        if (numa_available() < 0) {
-            m_ptr = std::aligned_alloc(HP_SIZE, m_total_size);
-            m_is_numa_managed = false;
-        } else {
-            m_ptr = numa_alloc_onnode(m_total_size, m_node);
-            if (!m_ptr) return std::unexpected(MemoryError::ALLOCATION_FAILED);
-            m_is_numa_managed = true;
-
-            unsigned long nodemask = (1UL << m_node);
-            if (set_mempolicy(MPOL_BIND, &nodemask, sizeof(nodemask) * 8 + 1) != 0) {
-                return std::unexpected(MemoryError::BIND_POLICY_FAILED);
+        if (!m_shm_name.empty()) {
+            // Task 8.1.1: POSIX SHM Orchestration
+            int shm_fd = shm_open(m_shm_name.c_str(), O_RDWR | O_CREAT, 0666);
+            if (shm_fd < 0) return std::unexpected(MemoryError::ALLOCATION_FAILED);
+            
+            if (ftruncate(shm_fd, m_total_size) != 0) {
+                close(shm_fd);
+                return std::unexpected(MemoryError::ALLOCATION_FAILED);
             }
-            // Phase 6: Hard-lock the memory pages into the RAM to prevent swap-out
-            if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
-                return std::unexpected(MemoryError::LOCK_FAILED);
-            }
-        }
 
-        int flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_LOCKED | MAP_POPULATE;
-        void* h_ptr = mmap(nullptr, m_total_size, PROT_READ | PROT_WRITE, flags, -1, 0);
+            // Map SHM segment; Use MAP_HUGETLB if on Linux production
+            int flags = MAP_SHARED;
+#if defined(__linux__)
+            flags |= MAP_HUGETLB; 
+#endif
+            void* ptr = mmap(nullptr, m_total_size, PROT_READ | PROT_WRITE, flags, shm_fd, 0);
+            close(shm_fd);
 
-        if (h_ptr == MAP_FAILED) {
-            if (mlock(m_ptr, m_total_size) != 0) return std::unexpected(MemoryError::LOCK_FAILED);
+            if (ptr == MAP_FAILED) return std::unexpected(MemoryError::HUGEPAGE_UPGRADE_FAILED);
+            m_ptr = ptr;
+            m_is_mmaped = true;
             return m_ptr;
         }
 
-        // Clean up initial numa buffer and use the HugePage mapping
-        if (m_is_numa_managed) numa_free(m_ptr, m_total_size);
-        else std::free(m_ptr);
-
-        m_ptr = h_ptr;
-        m_is_mmaped = true;
+        // Fallback to existing anonymous allocation for local tests
+        [[maybe_unused]] int current_cpu_node = numa_node_of_cpu(sched_getcpu());
+        if (numa_available() < 0) {
+            m_ptr = std::aligned_alloc(HP_SIZE, m_total_size);
+        } else {
+            m_ptr = numa_alloc_onnode(m_total_size, m_node);
+        }
         return m_ptr;
     }
 

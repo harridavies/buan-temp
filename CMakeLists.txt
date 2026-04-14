@@ -55,8 +55,9 @@ add_custom_command(
 )
 add_custom_target(buan_gatekeeper ALL DEPENDS ${XDP_KERN_OBJ})
 
-add_library(buan_core STATIC
+add_library(buan_core SHARED
     src/core/arena_allocator.cpp
+    src/math/feature_factory.cpp
     src/network/protocol_parser.cpp
     src/network/binance_parser.cpp
     src/monads/datapath_composition.cpp
@@ -65,11 +66,12 @@ add_library(buan_core STATIC
 )
 
 target_link_libraries(buan_core 
-    PRIVATE ${LIBBPF_LIBRARIES} 
-    PRIVATE ${LIBXDP_LIBRARIES} 
-    PRIVATE ${LIBNUMA}
-    PRIVATE ${LIBPCAP}
-    PRIVATE pthread
+    PUBLIC ${LIBBPF_LIBRARIES} 
+    PUBLIC ${LIBXDP_LIBRARIES} 
+    PUBLIC ${LIBNUMA}
+    PUBLIC ${LIBPCAP}
+    PUBLIC pthread
+    PUBLIC rt 
 )
 
 add_executable(buan_engine src/main.cpp) 

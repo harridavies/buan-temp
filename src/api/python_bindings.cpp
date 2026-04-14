@@ -5,6 +5,7 @@
 #include <optional>                 // Added for std::optional
 #include "buan/monads/engine.hpp"
 #include "buan/core/types.hpp"
+#include "buan/core/market_state_arena.hpp"
 
 namespace nb = nanobind;
 
@@ -50,20 +51,50 @@ NB_MODULE(buan_alpha, m) {
         .def_rw("volume", &buan::BuanMarketTick::volume)
         .def_rw("signal_drift", &buan::BuanMarketTick::signal_drift)
         .def_rw("flags", &buan::BuanMarketTick::flags); // Added missing flags field
-        
+    
+    // 2.5 Expose the Global Market State Slot
+    nb::class_<buan::MarketState>(m, "MarketState")
+        .def_prop_ro("last_price", [](const buan::MarketState& s) { return s.last_price.load(); })
+        .def_ro("rolling_z_score", &buan::MarketState::rolling_z_score)
+        .def_ro("volatility", &buan::MarketState::volatility)
+        .def_ro("rolling_mean", &buan::MarketState::rolling_mean)
+        .def_ro("correlation_benchmark", &buan::MarketState::correlation_benchmark);
+
     // 3. Expose the Engine Orchestrator
     nb::class_<buan::BuanEngine>(m, "Engine")
         .def("step", &buan::BuanEngine::step, nb::call_guard<nb::gil_scoped_release>())
         .def("set_threshold", &buan::BuanEngine::set_threshold)
         .def("set_price_spike_limit", &buan::BuanEngine::set_price_spike_limit)
         .def("set_max_vol_limit", &buan::BuanEngine::set_max_vol_limit) // Removed stray semicolon here
+        .def("get_arena_ptr", [](buan::BuanEngine& engine) {
+            // This is used for the Zero-Copy shared memory bridge
+            return reinterpret_cast<uintptr_t>(engine.get_arena_raw_ptr());
+        })
         .def("step_multi", [](buan::BuanEngine& engine, int count) {
             int captured = 0;
             for(int i = 0; i < count; ++i) {
                 if(engine.step() == buan::EngineStatus::SIGNAL_CAPTURED) captured++;
             }
             return captured;
-        }, nb::call_guard<nb::gil_scoped_release>()); // Semicolon goes here at the end of the chain
+        }, nb::call_guard<nb::gil_scoped_release>())
+        .def("get_global_market_state", [](buan::BuanEngine& engine) {
+            // Map as a raw byte array to avoid template instantiation issues with custom structs
+            size_t shape[1] = { engine.get_arena_size() * sizeof(buan::MarketState) };
+            return nb::ndarray<nb::numpy, uint8_t>(
+                engine.get_arena_raw_ptr(), 1, shape, nb::handle()
+            );
+        }, nb::rv_policy::reference)
+        .def("get_z_score_buffer", [](buan::BuanEngine& engine) {
+            // Returns a flat 2,048-float array of current Z-scores
+            auto* arena = engine.get_arena_raw_ptr();
+            std::vector<float> z_scores(2048);
+            for(int i = 0; i < 2048; ++i) {
+                z_scores[i] = arena[i].rolling_z_score;
+            }
+            return nb::ndarray<nb::numpy, float, nb::shape<2048>>(
+                z_scores.data(), 1, nullptr, nb::handle()
+            );
+        }, nb::rv_policy::copy); // We copy here for the 10Hz snapshot to ensure stability
 
     // 4. The "Secret Weapon": Zero-Copy Tensor Support
     m.def("get_tick_view", [](buan::BuanMarketTick& tick) {

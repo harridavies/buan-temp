@@ -39,7 +39,7 @@ int main(int argc, char** argv) {
     BuanRingBuffer<BuanAuditDescriptor, 8192> audit_ring; 
 
     // Phase 8: Initialize the Risk Gate for production verification
-    BuanRiskGate risk_gate(10000, 10000000000LL, 500000000000LL);
+    BuanRiskEngine risk_gate(10000, 500, 5000, 1000);
 
     // Engine now takes the risk_gate as the 4th argument
     BuanEngine engine(portal, ring, audit_ring, risk_gate);
@@ -83,9 +83,10 @@ int main(int argc, char** argv) {
             
             if (status == EngineStatus::SIGNAL_CAPTURED) {
                 BuanDescriptor desc;
-                if (ring.pop(desc)) {
-                    // Capture final Egress TSC at the point of delivery to Python/AI
-                    logger.record(captured++, desc.addr, BuanClock::read_precise());
+                BuanAuditDescriptor audit;
+                if (ring.pop(desc) && audit_ring.pop(audit)) {
+                    // Capture final Egress TSC
+                    logger.record(captured++, audit.ingress_tsc, audit.factor_tsc, BuanClock::read_precise());
                 }
             }
         } else {
@@ -126,8 +127,10 @@ int main(int argc, char** argv) {
                 last_historical_ns = frame.historical_ns;
                 last_wall_clock = std::chrono::high_resolution_clock::now();
 
-                // Record the "Atomic Gap"
-                logger.record(captured++, start_tsc, BuanClock::read_precise());
+                // On simulation path, we treat 'factor_tsc' as the same as 'egress' for simplicity
+                uint64_t now = BuanClock::read_precise();
+                logger.record(captured++, start_tsc, now, now);
+
                 total_processed++;
             }
             break; 
@@ -142,8 +145,14 @@ int main(int argc, char** argv) {
     out << BuanAuditLogger::get_compliance_header();
     for (size_t i = 0; i < captured; ++i) {
         const auto& e = logger.get_data()[i];
-        uint64_t delta_ns = (e.egress_tsc - e.ingress_tsc);
-        out << e.packet_id << "," << e.ingress_tsc << "," << e.egress_tsc << "," << delta_ns << "\n";
+        double factor_lat = (e.factor_tsc - e.ingress_tsc) / 3.0;
+        double total_lat = (e.egress_tsc - e.ingress_tsc) / 3.0;
+        out << e.packet_id << "," 
+            << e.ingress_tsc << "," 
+            << e.factor_tsc << "," 
+            << e.egress_tsc << "," 
+            << factor_lat << "," 
+            << total_lat << "\n";
     }
 
     if (hardware_ready) {
